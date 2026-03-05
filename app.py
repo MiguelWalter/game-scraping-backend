@@ -1,4 +1,5 @@
 from flask import Flask, render_template, request, jsonify
+from flask_cors import CORS  # <- Added for CORS
 from scraper import GamesRadarScraper
 from database import DatabaseHandler
 import threading
@@ -6,6 +7,7 @@ import time
 import os
 
 app = Flask(__name__)
+CORS(app)  # <- This enables all domains to call your backend
 
 # Initialize database and scraper
 db = None
