@@ -3,7 +3,7 @@ import json
 from datetime import datetime
 
 class DatabaseHandler:
-    def __init__(self, db_name='games_data.db'):
+    def __init__(self, db_name=':memory:'):  # Default to in-memory
         self.db_name = db_name
         self.conn = None
         self.connect()
@@ -31,6 +31,7 @@ class DatabaseHandler:
                     developer_info TEXT,
                     publisher_info TEXT,
                     article_url TEXT,
+                    article_type TEXT,
                     scraped_date TIMESTAMP
                 )
             ''')
@@ -45,8 +46,8 @@ class DatabaseHandler:
             cursor.execute('''
                 INSERT OR REPLACE INTO games 
                 (game_title, release_date, key_features, platform_availability, 
-                 developer_info, publisher_info, article_url, scraped_date)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                 developer_info, publisher_info, article_url, article_type, scraped_date)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 game_data['game_title'],
                 game_data['release_date'],
@@ -55,6 +56,7 @@ class DatabaseHandler:
                 game_data['developer_info'],
                 game_data['publisher_info'],
                 game_data.get('article_url', '#'),
+                game_data.get('article_type', 'Article'),
                 datetime.now()
             ))
             self.conn.commit()
@@ -69,9 +71,9 @@ class DatabaseHandler:
             cursor = self.conn.cursor()
             cursor.execute('''
                 SELECT game_title, release_date, key_features, platform_availability,
-                       developer_info, publisher_info, article_url
+                       developer_info, publisher_info, article_url, article_type
                 FROM games
-                ORDER BY release_date DESC
+                ORDER BY scraped_date DESC
             ''')
             rows = cursor.fetchall()
             
@@ -84,7 +86,8 @@ class DatabaseHandler:
                     'platform_availability': json.loads(row[3]) if row[3] else [],
                     'developer_info': row[4] or 'TBA',
                     'publisher_info': row[5] or 'TBA',
-                    'article_url': row[6] or '#'
+                    'article_url': row[6] or '#',
+                    'article_type': row[7] or 'Article'
                 })
             return games
         except Exception as e:
@@ -92,15 +95,15 @@ class DatabaseHandler:
             return []
     
     def search_games(self, query):
-        """Search games by title, developer, or publisher"""
+        """Search games by title"""
         try:
             cursor = self.conn.cursor()
             cursor.execute('''
                 SELECT game_title, release_date, key_features, platform_availability,
-                       developer_info, publisher_info, article_url
+                       developer_info, publisher_info, article_url, article_type
                 FROM games
                 WHERE game_title LIKE ? OR developer_info LIKE ? OR publisher_info LIKE ?
-                ORDER BY release_date DESC
+                ORDER BY scraped_date DESC
             ''', (f'%{query}%', f'%{query}%', f'%{query}%'))
             
             rows = cursor.fetchall()
@@ -113,7 +116,8 @@ class DatabaseHandler:
                     'platform_availability': json.loads(row[3]) if row[3] else [],
                     'developer_info': row[4] or 'TBA',
                     'publisher_info': row[5] or 'TBA',
-                    'article_url': row[6] or '#'
+                    'article_url': row[6] or '#',
+                    'article_type': row[7] or 'Article'
                 })
             return games
         except Exception as e:
