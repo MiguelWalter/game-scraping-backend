@@ -26,9 +26,6 @@ def scrape_url():
     data = request.get_json()
     target_url = data.get('url', '')
     
-    if 'gamesradar.com' not in target_url:
-        return jsonify({'error': 'Invalid URL'}), 400
-    
     def scrape_task():
         global games_db
         games_db = scraper.scrape_from_url(target_url, count=10)
