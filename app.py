@@ -11,7 +11,7 @@ games_db = []
 
 @app.route('/')
 def home():
-    return jsonify({'status': 'ok'})
+    return jsonify({'status': 'ok', 'message': 'GamesRadar Scraper API'})
 
 @app.route('/api/status')
 def get_status():
@@ -31,11 +31,11 @@ def scrape_url():
     
     def scrape_task():
         global games_db
-        games_db = scraper.scrape_from_url(target_url)
+        games_db = scraper.scrape_from_url(target_url, count=10)
     
     thread = threading.Thread(target=scrape_task)
     thread.start()
     
-    return jsonify({'message': 'Scraping'}), 202
+    return jsonify({'message': 'Scraping started'}), 202
 
 app = app
