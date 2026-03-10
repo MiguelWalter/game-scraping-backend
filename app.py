@@ -1,4 +1,4 @@
-from flask import Flask, jsonify
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 from scraper import GamesRadarScraper
 import threading
@@ -13,7 +13,7 @@ games_db = []
 def home():
     return jsonify({
         'status': 'ok',
-        'message': 'GamesRadar Random Game Scraper'
+        'message': 'GamesRadar URL Scraper - Paste any GamesRadar link to get 10 random articles'
     })
 
 @app.route('/api/status')
@@ -27,18 +27,28 @@ def get_status():
 def get_games():
     return jsonify(games_db)
 
-@app.route('/api/scrape-random', methods=['POST'])
-def scrape_random():
+@app.route('/api/scrape-url', methods=['POST'])
+def scrape_url():
+    data = request.get_json()
+    target_url = data.get('url', '')
+    
+    if not target_url:
+        return jsonify({'error': 'No URL provided'}), 400
+    
+    if 'gamesradar.com' not in target_url:
+        return jsonify({'error': 'Not a GamesRadar URL'}), 400
+    
     def scrape_task():
         global games_db
-        print("\n🎲 Starting random game scrape...")
-        games = scraper.scrape_random_games(count=10)
+        print(f"\n🔗 Scraping from URL: {target_url}")
+        games = scraper.scrape_from_url(target_url, count=10)
         games_db = games
-        print(f"✅ Stored {len(games)} random games")
+        print(f"✅ Stored {len(games)} games")
     
     thread = threading.Thread(target=scrape_task)
     thread.start()
-    return jsonify({'message': 'Scraping random games...'}), 202
+    
+    return jsonify({'message': f'Scraping from {target_url}...'}), 202
 
 app = app
 
