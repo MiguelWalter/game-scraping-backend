@@ -17,10 +17,8 @@ class GamesRadarScraper:
         """Scrape random game articles from GamesRadar"""
         print(f"\n🎮 SCRAPING FROM: {target_url}")
         
-        # Clean URL
-        base_url = target_url.split('?')[0]
-        if 'gamesradar.com' in base_url:
-            base_url = 'https://www.gamesradar.com/'
+        # Use main GamesRadar URL
+        base_url = "https://www.gamesradar.com/"
         
         try:
             # Fetch page
@@ -30,6 +28,25 @@ class GamesRadarScraper:
             # Find all article links
             all_articles = []
             
+            # Look for article tags first
+            articles = soup.find_all('article')
+            for article in articles:
+                link = article.find('a', href=True)
+                if link:
+                    href = link['href']
+                    if not href.startswith('http'):
+                        href = urljoin(base_url, href)
+                    
+                    title_elem = article.find('h3') or article.find('h2')
+                    title = title_elem.get_text().strip() if title_elem else link.get_text().strip()
+                    
+                    if 'gamesradar.com' in href and len(title) > 10:
+                        all_articles.append({
+                            'url': href,
+                            'title': title
+                        })
+            
+            # Also look for links
             for link in soup.find_all('a', href=True):
                 href = link['href']
                 text = link.get_text().strip()
@@ -37,10 +54,9 @@ class GamesRadarScraper:
                 if not href.startswith('http'):
                     href = urljoin(base_url, href)
                 
-                # Filter for game articles
                 if ('gamesradar.com' in href and 
                     len(text) > 15 and
-                    any(x in href for x in ['/news/', '/reviews/', '/games/', '/features/'])):
+                    any(x in href for x in ['/news/', '/reviews/', '/games/'])):
                     
                     all_articles.append({
                         'url': href,
@@ -49,40 +65,52 @@ class GamesRadarScraper:
             
             # Remove duplicates
             seen = set()
-            unique_articles = []
+            unique = []
             for article in all_articles:
                 if article['url'] not in seen:
                     seen.add(article['url'])
-                    unique_articles.append(article)
+                    unique.append(article)
             
-            if not unique_articles:
+            if not unique:
                 return []
             
             # Select random articles
-            if len(unique_articles) >= count:
-                selected = random.sample(unique_articles, count)
+            if len(unique) >= count:
+                selected = random.sample(unique, count)
             else:
-                selected = unique_articles
+                selected = unique
             
-            # Extract ALL required fields from each article
-            scraped_games = []
+            # Extract info
+            scraped = []
             for article in selected:
-                print(f"\n📊 Processing: {article['title'][:50]}...")
-                game_info = self.extract_all_fields(article['url'], article['title'])
-                if game_info:
-                    scraped_games.append(game_info)
-                time.sleep(1)  # Be respectful
+                try:
+                    # Try to get more details
+                    game_info = self.extract_basic_info(article['url'], article['title'])
+                    if game_info:
+                        scraped.append(game_info)
+                except:
+                    # If detailed extraction fails, use basic info
+                    scraped.append({
+                        'game_title': article['title'][:100],
+                        'release_date': 'Check article',
+                        'key_features': ['Read full article for details'],
+                        'platform_availability': ['See article'],
+                        'developer_info': 'See article',
+                        'publisher_info': 'See article',
+                        'article_url': article['url']
+                    })
+                time.sleep(0.5)
             
-            return scraped_games
+            return scraped[:count]
             
         except Exception as e:
             print(f"Error: {e}")
             return []
     
-    def extract_all_fields(self, url, title):
-        """Extract ALL required fields from article"""
+    def extract_basic_info(self, url, title):
+        """Extract basic info from article"""
         try:
-            response = self.session.get(url, timeout=10)
+            response = self.session.get(url, timeout=5)
             soup = BeautifulSoup(response.content, 'html.parser')
             
             # Remove scripts
@@ -91,181 +119,66 @@ class GamesRadarScraper:
             
             text = soup.get_text()
             
-            # ===========================================
-            # 1. GAME TITLE
-            # ===========================================
+            # Game Title
             game_title = title
             h1 = soup.find('h1')
             if h1:
                 game_title = h1.get_text().strip()
-            if not game_title or game_title == "":
-                game_title = "Not Available"
             
-            # ===========================================
-            # 2. RELEASE DATE
-            # ===========================================
+            # Release Date
             release_date = "Not Available"
-            
-            # Try meta tags first
-            meta_date = soup.find('meta', {'property': 'article:published_time'})
-            if meta_date and meta_date.get('content'):
-                release_date = meta_date['content'][:10]
-            else:
-                # Look for date patterns in text
-                date_patterns = [
-                    r'release date:?\s*([^.]+)',
-                    r'launch(?:es)?:?\s*([^.]+)',
-                    r'out now:?\s*([^.]+)',
-                    r'coming:?\s*([^.]+)',
-                    r'published:?\s*([^<]+)',
-                    r'posted:?\s*([^<]+)',
-                    r'\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s*\d{4}\b',
-                    r'\b\d{1,2}\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}\b'
-                ]
-                
-                for pattern in date_patterns:
-                    match = re.search(pattern, text, re.IGNORECASE)
-                    if match:
-                        release_date = match.group(0).strip()
-                        break
-            
-            # ===========================================
-            # 3. KEY FEATURES
-            # ===========================================
-            key_features = []
-            
-            # Look for bullet points or feature lists
-            feature_indicators = ['features', 'gameplay', 'key features', 'what to expect', 
-                                'highlights', 'including', 'you can']
-            
-            # Check list items
-            for li in soup.find_all('li'):
-                li_text = li.get_text().strip()
-                if len(li_text) > 15 and len(li_text) < 200:
-                    if any(indicator in li_text.lower() for indicator in feature_indicators):
-                        key_features.append(li_text)
-            
-            # Check paragraphs
-            if len(key_features) < 3:
-                for p in soup.find_all('p')[:5]:
-                    p_text = p.get_text().strip()
-                    if len(p_text) > 30 and len(p_text) < 250:
-                        if any(indicator in p_text.lower() for indicator in feature_indicators):
-                            key_features.append(p_text[:150] + "..." if len(p_text) > 150 else p_text)
-            
-            # If still no features, get first few sentences
-            if not key_features:
-                sentences = re.split(r'[.!?]+', text)
-                for sentence in sentences[:5]:
-                    sentence = sentence.strip()
-                    if len(sentence) > 30 and len(sentence) < 200:
-                        key_features.append(sentence[:150] + "...")
-            
-            if not key_features:
-                key_features = ["Not Available"]
-            
-            # Limit to 3-4 features
-            key_features = key_features[:4]
-            
-            # ===========================================
-            # 4. PLATFORM AVAILABILITY
-            # ===========================================
-            platforms = []
-            platform_list = [
-                'PS5', 'PlayStation 5',
-                'PS4', 'PlayStation 4',
-                'Xbox Series X', 'Xbox Series S', 'Xbox Series X|S',
-                'Xbox One',
-                'Nintendo Switch', 'Switch',
-                'PC', 'Steam', 'Epic Games Store',
-                'iOS', 'iPhone', 'Android', 'Mobile'
+            date_patterns = [
+                r'release date:?\s*([^.]+)',
+                r'launch(?:es)?:?\s*([^.]+)',
+                r'out now:?\s*([^.]+)'
             ]
+            for pattern in date_patterns:
+                match = re.search(pattern, text, re.IGNORECASE)
+                if match:
+                    release_date = match.group(0).strip()
+                    break
             
-            text_lower = text.lower()
+            # Platforms
+            platforms = []
+            platform_list = ['PS5', 'PS4', 'Xbox', 'Switch', 'PC']
             for platform in platform_list:
-                if platform.lower() in text_lower:
-                    # Clean up platform names
-                    if 'playstation 5' in platform_lower or 'ps5' in platform_lower:
-                        if 'PS5' not in platforms:
-                            platforms.append('PS5')
-                    elif 'playstation 4' in platform_lower or 'ps4' in platform_lower:
-                        if 'PS4' not in platforms:
-                            platforms.append('PS4')
-                    elif 'xbox series' in platform_lower:
-                        if 'Xbox Series X|S' not in platforms:
-                            platforms.append('Xbox Series X|S')
-                    elif 'xbox one' in platform_lower:
-                        if 'Xbox One' not in platforms:
-                            platforms.append('Xbox One')
-                    elif 'switch' in platform_lower:
-                        if 'Nintendo Switch' not in platforms:
-                            platforms.append('Nintendo Switch')
-                    elif 'pc' in platform_lower or 'steam' in platform_lower:
-                        if 'PC' not in platforms:
-                            platforms.append('PC')
-                    elif 'ios' in platform_lower or 'iphone' in platform_lower:
-                        if 'iOS' not in platforms:
-                            platforms.append('iOS')
-                    elif 'android' in platform_lower:
-                        if 'Android' not in platforms:
-                            platforms.append('Android')
-            
+                if platform.lower() in text.lower():
+                    platforms.append(platform)
             if not platforms:
                 platforms = ["Not Available"]
             
-            # ===========================================
-            # 5. DEVELOPER INFORMATION
-            # ===========================================
+            # Developer
             developer = "Not Available"
-            dev_patterns = [
-                r'developer:?\s*([^.]+)',
-                r'developed by:?\s*([^.]+)',
-                r'from\s+([^.<,]+)',
-                r'created by:?\s*([^.]+)'
-            ]
+            dev_match = re.search(r'developer:?\s*([^.]+)', text, re.IGNORECASE)
+            if dev_match:
+                developer = dev_match.group(1).strip()
             
-            for pattern in dev_patterns:
-                match = re.search(pattern, text, re.IGNORECASE)
-                if match:
-                    developer = match.group(1).strip()
-                    # Clean up
-                    developer = re.sub(r'\s+', ' ', developer)
-                    if len(developer) > 50:
-                        developer = developer[:50] + "..."
-                    break
-            
-            # ===========================================
-            # 6. PUBLISHER INFORMATION
-            # ===========================================
+            # Publisher
             publisher = "Not Available"
-            pub_patterns = [
-                r'publisher:?\s*([^.]+)',
-                r'published by:?\s*([^.]+)'
-            ]
+            pub_match = re.search(r'publisher:?\s*([^.]+)', text, re.IGNORECASE)
+            if pub_match:
+                publisher = pub_match.group(1).strip()
             
-            for pattern in pub_patterns:
-                match = re.search(pattern, text, re.IGNORECASE)
-                if match:
-                    publisher = match.group(1).strip()
-                    # Clean up
-                    publisher = re.sub(r'\s+', ' ', publisher)
-                    if len(publisher) > 50:
-                        publisher = publisher[:50] + "..."
-                    break
+            # Key Features
+            features = []
+            paragraphs = soup.find_all('p')[:3]
+            for p in paragraphs:
+                p_text = p.get_text().strip()
+                if len(p_text) > 30:
+                    features.append(p_text[:150] + "..." if len(p_text) > 150 else p_text)
+            if not features:
+                features = ["Not Available"]
             
-            # ===========================================
-            # Return ALL required fields
-            # ===========================================
             return {
-                'game_title': game_title[:150],
+                'game_title': game_title[:100],
                 'release_date': release_date,
-                'key_features': key_features,
-                'platform_availability': platforms,
+                'key_features': features[:3],
+                'platform_availability': platforms[:3],
                 'developer_info': developer,
                 'publisher_info': publisher,
                 'article_url': url
             }
             
         except Exception as e:
-            print(f"Error extracting: {e}")
+            print(f"Extract error: {e}")
             return None
