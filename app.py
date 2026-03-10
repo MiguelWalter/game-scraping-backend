@@ -1,69 +1,46 @@
-from flask import Flask, request, jsonify
+from flask import Flask, jsonify
 from flask_cors import CORS
 from scraper import GamesRadarScraper
 import threading
-import time
 
 app = Flask(__name__)
 CORS(app)
 
 scraper = GamesRadarScraper()
-articles_db = []
+games_db = []
 
 @app.route('/')
 def home():
     return jsonify({
         'status': 'ok',
-        'message': 'GamesRadar Random Article Scraper',
-        'endpoints': {
-            'scrape': 'POST /api/scrape-random - Scrape 10 random articles',
-            'articles': 'GET /api/articles - Get all scraped articles',
-            'status': 'GET /api/status - Check status'
-        }
+        'message': 'GamesRadar Random Game Scraper'
     })
 
-@app.route('/api/status', methods=['GET'])
+@app.route('/api/status')
 def get_status():
     return jsonify({
-        'articles_count': len(articles_db),
-        'status': 'ready' if len(articles_db) > 0 else 'empty'
+        'games_count': len(games_db),
+        'status': 'ready' if len(games_db) > 0 else 'empty'
     })
 
-@app.route('/api/articles', methods=['GET'])
-def get_articles():
-    return jsonify(articles_db)
+@app.route('/api/games')
+def get_games():
+    return jsonify(games_db)
 
-@app.route('/api/scrape-random', methods=['POST', 'OPTIONS'])
+@app.route('/api/scrape-random', methods=['POST'])
 def scrape_random():
-    if request.method == 'OPTIONS':
-        return '', 200
-    
     def scrape_task():
-        global articles_db
-        try:
-            print("\n🕷️ Starting random article scrape...")
-            articles = scraper.scrape_random_articles(count=10)
-            
-            # Clear and update database
-            articles_db.clear()
-            articles_db.extend(articles)
-            
-            print(f"✅ Stored {len(articles)} random articles")
-        except Exception as e:
-            print(f"❌ Error in scrape task: {e}")
+        global games_db
+        print("\n🎲 Starting random game scrape...")
+        games = scraper.scrape_random_games(count=10)
+        games_db = games
+        print(f"✅ Stored {len(games)} random games")
     
     thread = threading.Thread(target=scrape_task)
-    thread.daemon = True
     thread.start()
-    
-    return jsonify({'message': 'Scraping random articles...'}), 202
+    return jsonify({'message': 'Scraping random games...'}), 202
 
 app = app
 
 if __name__ == '__main__':
-    print("\n" + "="*70)
-    print("🎮 GAMESRADAR RANDOM ARTICLE SCRAPER")
-    print("="*70)
-    print("\n🌐 Server running at: http://localhost:5000")
-    print("="*70 + "\n")
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run()
