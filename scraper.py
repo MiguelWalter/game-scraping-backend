@@ -2,83 +2,104 @@ import requests
 from bs4 import BeautifulSoup
 import time
 import re
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 import random
 
 class GamesRadarScraper:
     def __init__(self):
-        self.base_url = "https://www.gamesradar.com"
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
     
-    def scrape_random_games(self, count=10):
-        """Scrape random game articles from GamesRadar"""
+    def scrape_from_url(self, target_url, count=10):
+        """Scrape random game articles from any GamesRadar URL"""
         print("\n" + "="*60)
-        print("🎮 SCRAPING RANDOM GAMES FROM GAMESRADAR")
+        print(f"🎮 SCRAPING FROM: {target_url}")
         print("="*60)
         
-        all_games = []
+        if 'gamesradar.com' not in target_url:
+            print("❌ Not a GamesRadar URL")
+            return []
         
-        # Sources to scrape from
-        sources = [
-            "/games/",
-            "/news/",
-            "/reviews/",
-            "/features/",
-            "/category/pc-gaming/",
-            "/category/ps5/",
-            "/category/xbox-series-x/",
-            "/category/nintendo-switch/"
-        ]
-        
-        # Shuffle sources for randomness
-        random.shuffle(sources)
-        
-        for source in sources:
-            try:
-                url = urljoin(self.base_url, source)
-                print(f"📡 Checking: {url}")
+        try:
+            response = requests.get(target_url, headers=self.headers, timeout=10)
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # Find all article links on the page
+            all_articles = []
+            
+            # Look for article tags
+            articles = soup.find_all('article')
+            print(f"📊 Found {len(articles)} article elements")
+            
+            for article in articles:
+                link = article.find('a', href=True)
+                if link:
+                    href = link['href']
+                    if not href.startswith('http'):
+                        href = urljoin(target_url, href)
+                    
+                    # Get title
+                    title_elem = article.find('h3') or article.find('h2') or article.find('h4')
+                    title = title_elem.get_text().strip() if title_elem else link.get_text().strip()
+                    
+                    if 'gamesradar.com' in href and len(title) > 15:
+                        all_articles.append({
+                            'url': href,
+                            'title': title
+                        })
+            
+            # Also look for links in the page
+            for link in soup.find_all('a', href=True):
+                href = link['href']
+                if not href.startswith('http'):
+                    href = urljoin(target_url, href)
                 
-                response = requests.get(url, headers=self.headers, timeout=10)
-                soup = BeautifulSoup(response.content, 'html.parser')
+                text = link.get_text().strip()
                 
-                # Find all article links
-                articles = soup.find_all('article')
-                
-                for article in articles:
-                    link = article.find('a', href=True)
-                    if link:
-                        href = link['href']
-                        if not href.startswith('http'):
-                            href = urljoin(self.base_url, href)
-                        
-                        # Get title
-                        title_elem = article.find('h3') or article.find('h2')
-                        title = title_elem.get_text().strip() if title_elem else link.get_text().strip()
-                        
-                        if title and len(title) > 10:
-                            # Check if it's a game article
-                            if any(word in href.lower() for word in ['/games/', '/reviews/', '/news/']):
-                                game_info = self.extract_game_info(href, title)
-                                if game_info:
-                                    all_games.append(game_info)
-                                    print(f"  ✅ Found: {title[:50]}...")
-                                    
-                                    if len(all_games) >= count:
-                                        return all_games[:count]
-                
+                if ('gamesradar.com' in href and 
+                    len(text) > 20 and
+                    any(keyword in href for keyword in ['/news/', '/reviews/', '/games/', '/features/', '/guides/'])):
+                    
+                    all_articles.append({
+                        'url': href,
+                        'title': text
+                    })
+            
+            # Remove duplicates
+            unique_articles = []
+            seen_urls = set()
+            for article in all_articles:
+                if article['url'] not in seen_urls:
+                    seen_urls.add(article['url'])
+                    unique_articles.append(article)
+            
+            print(f"✅ Found {len(unique_articles)} unique articles")
+            
+            if not unique_articles:
+                return []
+            
+            # Select random articles
+            if len(unique_articles) >= count:
+                selected = random.sample(unique_articles, count)
+            else:
+                selected = unique_articles
+                print(f"⚠️ Only found {len(unique_articles)} articles, using all")
+            
+            # Extract info from each selected article
+            scraped_games = []
+            for i, article in enumerate(selected):
+                print(f"\n📊 Processing article {i+1}/{len(selected)}")
+                game_info = self.extract_game_info(article['url'], article['title'])
+                if game_info:
+                    scraped_games.append(game_info)
                 time.sleep(1)
-                
-            except Exception as e:
-                print(f"  ❌ Error: {e}")
-                continue
-        
-        # If we don't have enough, get from different sources
-        while len(all_games) < count:
-            all_games.append(self.get_fallback_game())
-        
-        return all_games[:count]
+            
+            return scraped_games
+            
+        except Exception as e:
+            print(f"❌ Error: {e}")
+            return []
     
     def extract_game_info(self, url, title):
         """Extract game information from article"""
@@ -122,7 +143,7 @@ class GamesRadarScraper:
                     platforms.append(platform)
             
             if not platforms:
-                platforms = ["Platform information not available"]
+                platforms = ["Not Available"]
             
             # Get developer
             developer = "Not Available"
@@ -145,7 +166,7 @@ class GamesRadarScraper:
                     features.append(p_text[:150] + "..." if len(p_text) > 150 else p_text)
             
             if not features:
-                features = ["Read the full article for details"]
+                features = ["Not Available"]
             
             return {
                 'game_title': game_title[:100],
@@ -160,15 +181,3 @@ class GamesRadarScraper:
         except Exception as e:
             print(f"Error extracting: {e}")
             return None
-    
-    def get_fallback_game(self):
-        """Fallback game if scraping fails"""
-        return {
-            'game_title': "Random Game Article",
-            'release_date': "Check GamesRadar",
-            'platform_availability': ["Multiple Platforms"],
-            'developer_info': "See article",
-            'publisher_info': "See article",
-            'key_features': ["Click the link to read the full article on GamesRadar"],
-            'article_url': "https://www.gamesradar.com"
-        }
