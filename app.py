@@ -4,7 +4,8 @@ from scraper import GamesRadarScraper
 import threading
 
 app = Flask(__name__)
-CORS(app)
+# Allow all origins for testing
+CORS(app, origins=["https://miguelwalter.github.io", "http://localhost:3000", "*"])
 
 scraper = GamesRadarScraper()
 games_db = []
@@ -27,8 +28,16 @@ def get_status():
 def get_games():
     return jsonify(games_db)
 
-@app.route('/api/scrape-url', methods=['POST'])
+@app.route('/api/scrape-url', methods=['POST', 'OPTIONS'])
 def scrape_url():
+    # Handle preflight CORS request
+    if request.method == 'OPTIONS':
+        response = jsonify({'status': 'ok'})
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
+        response.headers.add('Access-Control-Allow-Methods', 'POST')
+        return response, 200
+    
     data = request.get_json()
     target_url = data.get('url', '')
     
@@ -50,6 +59,7 @@ def scrape_url():
     
     return jsonify({'message': f'Scraping from {target_url}...'}), 202
 
+# For Vercel
 app = app
 
 if __name__ == '__main__':
