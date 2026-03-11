@@ -1,7 +1,7 @@
 import requests
-import json
-import re
+from bs4 import BeautifulSoup
 import random
+import re
 from urllib.parse import urljoin
 
 class GamesRadarScraper:
@@ -9,118 +9,159 @@ class GamesRadarScraper:
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
-        self.session = requests.Session()
-        self.session.headers.update(self.headers)
     
     def scrape_from_url(self, target_url, count=10):
-        """Extract articles from JSON embedded in the page"""
-        print(f"\n🎮 SCRAPING FROM: {target_url}")
+        """Scrape real articles from GamesRadar"""
+        print(f"\n🎮 SCRAPING: {target_url}")
         
         try:
-            # Fetch the page
-            response = self.session.get(target_url, timeout=15)
-            html = response.text
+            # Fetch page
+            response = requests.get(target_url, headers=self.headers, timeout=10)
+            soup = BeautifulSoup(response.text, 'html.parser')
             
-            # Try to find JSON-LD data (common for article listings)
+            # Find all article links
             articles = []
             
-            # Method 1: Look for JSON-LD script tags
-            json_ld_matches = re.findall(r'<script type="application/ld\+json">(.*?)</script>', html, re.DOTALL)
-            for match in json_ld_matches:
-                try:
-                    data = json.loads(match)
-                    # Handle different JSON-LD structures
-                    if isinstance(data, dict):
-                        if '@graph' in data:
-                            for item in data['@graph']:
-                                if item.get('@type') == 'Article' and 'url' in item:
-                                    articles.append({
-                                        'url': item['url'],
-                                        'title': item.get('headline', '')
-                                    })
-                        elif data.get('@type') == 'Article':
-                            articles.append({
-                                'url': data.get('url', ''),
-                                'title': data.get('headline', '')
-                            })
-                    elif isinstance(data, list):
-                        for item in data:
-                            if item.get('@type') == 'Article':
-                                articles.append({
-                                    'url': item.get('url', ''),
-                                    'title': item.get('headline', '')
-                                })
-                except:
-                    continue
-            
-            # Method 2: Look for Next.js data (common in modern sites)
-            next_data_matches = re.findall(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', html, re.DOTALL)
-            for match in next_data_matches:
-                try:
-                    data = json.loads(match)
-                    # Navigate through the complex structure to find articles
-                    # This is site-specific and may need adjustment
-                    props = data.get('props', {})
-                    page_props = props.get('pageProps', {})
-                    # Look for article lists in various places
-                    for key, value in page_props.items():
-                        if isinstance(value, list):
-                            for item in value:
-                                if isinstance(item, dict) and 'url' in item and 'title' in item:
-                                    articles.append({
-                                        'url': urljoin(target_url, item['url']),
-                                        'title': item['title']
-                                    })
-                except:
-                    continue
-            
-            # Method 3: Fallback – look for <a> tags with article-like URLs
-            if len(articles) < count:
-                # Simple regex to find links that look like articles
-                link_pattern = r'<a[^>]+href="([^"]+)"[^>]*>([^<]+)</a>'
-                for url, title in re.findall(link_pattern, html):
-                    if ('/news/' in url or '/reviews/' in url or '/games/' in url) and len(title) > 15:
-                        full_url = urljoin(target_url, url)
+            # Method 1: Find all article tags
+            for article in soup.find_all('article'):
+                link = article.find('a')
+                if link and link.get('href'):
+                    href = link['href']
+                    if not href.startswith('http'):
+                        href = urljoin(target_url, href)
+                    
+                    title = article.find(['h2', 'h3', 'h4'])
+                    title_text = title.text.strip() if title else link.text.strip()
+                    
+                    if 'gamesradar.com' in href and len(title_text) > 10:
                         articles.append({
-                            'url': full_url,
-                            'title': title.strip()
+                            'url': href,
+                            'title': title_text
                         })
             
-            # Remove duplicates and filter
+            # Method 2: Find links that look like articles
+            for link in soup.find_all('a', href=True):
+                href = link['href']
+                text = link.text.strip()
+                
+                if not href.startswith('http'):
+                    href = urljoin(target_url, href)
+                
+                if ('gamesradar.com' in href and 
+                    len(text) > 15 and
+                    any(x in href for x in ['/news/', '/reviews/', '/games/'])):
+                    
+                    articles.append({
+                        'url': href,
+                        'title': text
+                    })
+            
+            # Remove duplicates
             seen = set()
-            unique_articles = []
+            unique = []
             for a in articles:
-                if a['url'] and a['url'] not in seen and len(a['title']) > 10:
+                if a['url'] not in seen and a['url']:
                     seen.add(a['url'])
-                    unique_articles.append(a)
+                    unique.append(a)
             
-            print(f"✅ Found {len(unique_articles)} unique articles via JSON")
-            
-            if not unique_articles:
-                print("❌ No articles found")
+            if not unique:
                 return []
             
             # Select random articles
-            if len(unique_articles) >= count:
-                selected = random.sample(unique_articles, count)
+            if len(unique) >= count:
+                selected = random.sample(unique, count)
             else:
-                selected = unique_articles
+                selected = unique
             
-            # Return with placeholder info (you can enhance this later)
-            games = []
+            # Extract full details for each article
+            scraped_games = []
             for article in selected:
-                games.append({
-                    'game_title': article['title'][:100],
-                    'release_date': 'See article',
-                    'key_features': ['Read full article for details'],
-                    'platform_availability': ['Check article'],
-                    'developer_info': 'See article',
-                    'publisher_info': 'See article',
-                    'article_url': article['url']
-                })
+                try:
+                    # Fetch article page
+                    article_response = requests.get(article['url'], headers=self.headers, timeout=10)
+                    article_soup = BeautifulSoup(article_response.text, 'html.parser')
+                    
+                    # Remove scripts
+                    for script in article_soup(["script", "style"]):
+                        script.decompose()
+                    
+                    text = article_soup.get_text()
+                    
+                    # Extract title
+                    title = article['title']
+                    h1 = article_soup.find('h1')
+                    if h1:
+                        title = h1.text.strip()
+                    
+                    # Extract release date
+                    date = "Not Available"
+                    date_patterns = [
+                        r'release date:?\s*([^.]+)',
+                        r'launch:?\s*([^.]+)',
+                        r'out now:?\s*([^.]+)',
+                        r'\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s*\d{4}\b'
+                    ]
+                    for pattern in date_patterns:
+                        match = re.search(pattern, text, re.IGNORECASE)
+                        if match:
+                            date = match.group(0).strip()
+                            break
+                    
+                    # Extract platforms
+                    platforms = []
+                    platform_list = ['PS5', 'PS4', 'Xbox Series X', 'Xbox One', 'Nintendo Switch', 'PC']
+                    for platform in platform_list:
+                        if platform.lower() in text.lower():
+                            platforms.append(platform)
+                    if not platforms:
+                        platforms = ["Not Available"]
+                    
+                    # Extract developer
+                    developer = "Not Available"
+                    dev_match = re.search(r'developer:?\s*([^.]+)', text, re.IGNORECASE)
+                    if dev_match:
+                        developer = dev_match.group(1).strip()
+                    
+                    # Extract publisher
+                    publisher = "Not Available"
+                    pub_match = re.search(r'publisher:?\s*([^.]+)', text, re.IGNORECASE)
+                    if pub_match:
+                        publisher = pub_match.group(1).strip()
+                    
+                    # Extract features
+                    features = []
+                    for p in article_soup.find_all('p')[:5]:
+                        p_text = p.text.strip()
+                        if len(p_text) > 30:
+                            features.append(p_text[:150] + "..." if len(p_text) > 150 else p_text)
+                    if not features:
+                        features = ["Not Available"]
+                    
+                    scraped_games.append({
+                        'game_title': title[:150],
+                        'release_date': date,
+                        'platform_availability': platforms,
+                        'developer_info': developer,
+                        'publisher_info': publisher,
+                        'key_features': features[:4],
+                        'article_url': article['url']
+                    })
+                    
+                except Exception as e:
+                    print(f"Error extracting details: {e}")
+                    # Add basic info if detail extraction fails
+                    scraped_games.append({
+                        'game_title': article['title'][:150],
+                        'release_date': "Not Available",
+                        'platform_availability': ["Not Available"],
+                        'developer_info': "Not Available",
+                        'publisher_info': "Not Available",
+                        'key_features': ["Not Available"],
+                        'article_url': article['url']
+                    })
             
-            return games
+            return scraped_games
             
         except Exception as e:
-            print(f"❌ Error: {e}")
+            print(f"Error: {e}")
             return []
