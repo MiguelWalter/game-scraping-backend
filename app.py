@@ -1,42 +1,56 @@
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-from scraper import GamesRadarScraper
-import threading
+from flask import Flask, request, render_template_string, jsonify
+from scraper import get_random_articles
+import traceback
 
 app = Flask(__name__)
-CORS(app)
 
-scraper = GamesRadarScraper()
-games_db = []
+# Simple HTML form (you can replace with your own template)
+HTML_FORM = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>GamesRadar Scraper</title>
+</head>
+<body>
+    <h1>GamesRadar URL Scraper</h1>
+    <p>Paste any GamesRadar link to get 10 random game articles</p>
+    <form method="post">
+        <input type="url" name="url" placeholder="Enter GamesRadar URL" required size="50" value="{{ request.form.get('url', '') }}">
+        <button type="submit">Get 10 Random Articles</button>
+    </form>
+    {% if articles %}
+        <h2>Results:</h2>
+        <ul>
+        {% for article in articles %}
+            <li><a href="{{ article }}" target="_blank">{{ article }}</a></li>
+        {% endfor %}
+        </ul>
+    {% elif error %}
+        <p style="color:red;">{{ error }}</p>
+    {% endif %}
+    <p><small>Example: https://www.gamesradar.com/uk/ or https://www.gamesradar.com/news/</small></p>
+</body>
+</html>
+"""
 
-@app.route('/')
-def home():
-    return jsonify({'status': 'ok', 'message': 'GamesRadar Scraper API'})
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    articles = []
+    error = None
+    if request.method == 'POST':
+        url = request.form.get('url', '').strip()
+        if url:
+            try:
+                articles = get_random_articles(url)
+                if not articles:
+                    error = "No articles found on this page. Try a different GamesRadar URL."
+            except Exception as e:
+                # Log the error (Vercel will capture this in logs)
+                print("Error in / route:", traceback.format_exc())
+                error = "An internal error occurred. Please try again later."
+        else:
+            error = "Please enter a URL."
+    return render_template_string(HTML_FORM, articles=articles, error=error)
 
-@app.route('/api/status')
-def get_status():
-    return jsonify({'games_count': len(games_db)})
-
-@app.route('/api/games')
-def get_games():
-    return jsonify(games_db)
-
-@app.route('/api/scrape-url', methods=['POST'])
-def scrape_url():
-    data = request.get_json()
-    # Use provided URL or default to homepage
-    target_url = data.get('url', 'https://www.gamesradar.com/')
-
-    def scrape_task():
-        global games_db
-        games_db = scraper.scrape_games(start_url=target_url, max_games=10)
-
-    thread = threading.Thread(target=scrape_task)
-    thread.start()
-    return jsonify({'message': f'Scraping started from {target_url}'}), 202
-
-# Required for Vercel
-app = app
-
-if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+# This is required for Vercel's serverless function
+app.debug = False
