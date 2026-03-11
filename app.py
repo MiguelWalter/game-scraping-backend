@@ -7,7 +7,7 @@ app = Flask(__name__)
 CORS(app)
 
 scraper = GamesRadarScraper()
-games_db = []  # in-memory storage (can be replaced with JSON/database)
+games_db = []
 
 @app.route('/')
 def home():
@@ -23,12 +23,20 @@ def get_games():
 
 @app.route('/api/scrape-url', methods=['POST'])
 def scrape_url():
-    # We ignore the URL – always scrape from RSS
+    data = request.get_json()
+    # Use provided URL or default to homepage
+    target_url = data.get('url', 'https://www.gamesradar.com/')
+
     def scrape_task():
         global games_db
-        games_db = scraper.scrape_from_url(count=10)
+        games_db = scraper.scrape_games(start_url=target_url, max_games=10)
+
     thread = threading.Thread(target=scrape_task)
     thread.start()
-    return jsonify({'message': 'Scraping started'}), 202
+    return jsonify({'message': f'Scraping started from {target_url}'}), 202
 
+# Required for Vercel
 app = app
+
+if __name__ == '__main__':
+    app.run(debug=True, host='0.0.0.0', port=5000)
