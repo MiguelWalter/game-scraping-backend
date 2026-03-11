@@ -1,168 +1,161 @@
 import requests
-import xml.etree.ElementTree as ET
 from bs4 import BeautifulSoup
-import random
+import time
 import re
 from urllib.parse import urljoin
 
 class GamesRadarScraper:
     def __init__(self):
+        self.base_url = "https://www.gamesradar.com"
         self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         }
-        # RSS feeds from GamesRadar – these are real URLs, not hardcoded data
-        self.rss_feeds = [
-            "https://www.gamesradar.com/uk/feeds/latest/news/",
-            "https://www.gamesradar.com/uk/feeds/latest/reviews/",
-            "https://www.gamesradar.com/feeds/latest/news/",
-            "https://www.gamesradar.com/feeds/latest/reviews/",
-            "https://www.gamesradar.com/uk/feeds/games/",
-            "https://www.gamesradar.com/feeds/games/"
-        ]
+        self.session = requests.Session()
+        self.session.headers.update(self.headers)
 
-    def scrape_from_url(self, target_url=None, count=10):
-        """
-        Scrape articles from GamesRadar RSS feeds, then extract detailed fields.
-        target_url is ignored – we always use RSS feeds for reliability.
-        """
-        print("\n🎮 SCRAPING FROM GAMESRADAR RSS FEEDS")
-        all_articles = []
-
-        for feed_url in self.rss_feeds:
-            try:
-                print(f"📡 Fetching RSS: {feed_url}")
-                resp = requests.get(feed_url, headers=self.headers, timeout=10)
-                root = ET.fromstring(resp.content)
-
-                for item in root.findall('.//item'):
-                    title = item.find('title')
-                    link = item.find('link')
-                    pubDate = item.find('pubDate')
-                    if title is not None and link is not None and title.text and link.text:
-                        all_articles.append({
-                            'url': link.text,
-                            'title': title.text,
-                            'date': pubDate.text if pubDate is not None else ''
-                        })
-            except Exception as e:
-                print(f"RSS error {feed_url}: {e}")
-                continue
-
-        print(f"✅ Found {len(all_articles)} raw articles from RSS")
-
-        # Remove duplicates by URL
-        seen = set()
-        unique_articles = []
-        for a in all_articles:
-            if a['url'] not in seen:
-                seen.add(a['url'])
-                unique_articles.append(a)
-
-        if not unique_articles:
+    def get_article_links(self, url, max_links=15):
+        """Extract article links from a listing page (like homepage)"""
+        print(f"📡 Fetching article list from: {url}")
+        try:
+            resp = self.session.get(url, timeout=10)
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            links = []
+            # Look for common article containers
+            for article in soup.find_all('div', class_=re.compile(r'listingResult|result|article')):
+                link_tag = article.find('a', href=True)
+                if link_tag:
+                    href = link_tag['href']
+                    if href.startswith('http'):
+                        full_url = href
+                    else:
+                        full_url = urljoin(self.base_url, href)
+                    # Get title
+                    title_elem = article.find(['h3', 'h2', 'h4'], class_=re.compile(r'title|name'))
+                    title = title_elem.get_text().strip() if title_elem else link_tag.get_text().strip()
+                    if 'gamesradar.com' in full_url and len(title) > 10:
+                        links.append({'url': full_url, 'title': title})
+            # Remove duplicates
+            seen = set()
+            unique = []
+            for l in links:
+                if l['url'] not in seen:
+                    seen.add(l['url'])
+                    unique.append(l)
+            print(f"✅ Found {len(unique)} article links")
+            return unique[:max_links]
+        except Exception as e:
+            print(f"❌ Error fetching article list: {e}")
             return []
 
-        # Select random articles
-        selected = random.sample(unique_articles, min(count, len(unique_articles)))
+    def extract_game_info(self, article_url, article_title):
+        """Extract all required fields from an article page"""
+        try:
+            print(f"  📄 Processing: {article_title[:60]}...")
+            resp = self.session.get(article_url, timeout=10)
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            # Remove scripts/styles
+            for tag in soup(['script', 'style']):
+                tag.decompose()
+            text = soup.get_text()
 
-        # For each selected article, fetch the page and extract required fields
-        scraped_games = []
-        for article in selected:
-            try:
-                print(f"🔍 Processing: {article['title'][:60]}...")
-                resp = requests.get(article['url'], headers=self.headers, timeout=10)
-                soup = BeautifulSoup(resp.text, 'html.parser')
+            # 1. Game Title (use h1 if available)
+            title = article_title
+            h1 = soup.find('h1')
+            if h1:
+                title = h1.get_text().strip()
 
-                # Remove scripts/styles
-                for tag in soup(["script", "style"]):
-                    tag.decompose()
+            # 2. Release Date
+            release_date = "Not Available"
+            date_patterns = [
+                r'release date:?\s*([^.]+)',
+                r'launch(?:es)?:?\s*([^.]+)',
+                r'out now:?\s*([^.]+)',
+                r'coming:?\s*([^.]+)',
+                r'\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s*\d{4}\b'
+            ]
+            for pat in date_patterns:
+                match = re.search(pat, text, re.IGNORECASE)
+                if match:
+                    release_date = match.group(0).strip()
+                    break
 
-                text = soup.get_text()
+            # 3. Key Features (look for bullet points or feature lists)
+            features = []
+            # Find list items that might be features
+            for li in soup.find_all('li'):
+                li_text = li.get_text().strip()
+                if 20 < len(li_text) < 200 and any(k in li_text.lower() for k in ['feature', 'gameplay', 'include', 'allows']):
+                    features.append(li_text)
+            # If none, take first few paragraphs
+            if len(features) < 3:
+                for p in soup.find_all('p')[:5]:
+                    p_text = p.get_text().strip()
+                    if 30 < len(p_text) < 250:
+                        features.append(p_text[:150] + "…" if len(p_text) > 150 else p_text)
+            features = features[:4] or ["Not Available"]
 
-                # 1. Game Title (from h1 or fallback to RSS title)
-                game_title = article['title']
-                h1 = soup.find('h1')
-                if h1:
-                    game_title = h1.get_text().strip()
+            # 4. Platforms
+            platforms = []
+            platform_keywords = {
+                'PS5': ['ps5', 'playstation 5'],
+                'PS4': ['ps4', 'playstation 4'],
+                'Xbox Series X|S': ['xbox series'],
+                'Xbox One': ['xbox one'],
+                'Nintendo Switch': ['switch', 'nintendo switch'],
+                'PC': ['pc', 'steam', 'windows']
+            }
+            text_lower = text.lower()
+            for plat, keys in platform_keywords.items():
+                if any(k in text_lower for k in keys):
+                    platforms.append(plat)
+            if not platforms:
+                platforms = ["Not Available"]
 
-                # 2. Release Date (search in article text)
-                release_date = "Not Available"
-                date_patterns = [
-                    r'release date:?\s*([^.]+)',
-                    r'launch(?:es)?:?\s*([^.]+)',
-                    r'out now:?\s*([^.]+)',
-                    r'coming:?\s*([^.]+)',
-                    r'\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s*\d{4}\b'
-                ]
-                for pat in date_patterns:
-                    m = re.search(pat, text, re.IGNORECASE)
-                    if m:
-                        release_date = m.group(0).strip()
-                        break
+            # 5. Developer
+            developer = "Not Available"
+            dev_match = re.search(r'developer:?\s*([^.]+)', text, re.IGNORECASE)
+            if dev_match:
+                developer = dev_match.group(1).strip()
 
-                # 3. Key Features (look for bullet points or first paragraphs)
-                key_features = []
-                # Look for list items that might be features
-                for li in soup.find_all('li'):
-                    li_text = li.get_text().strip()
-                    if 20 < len(li_text) < 200 and any(kw in li_text.lower() for kw in ['feature', 'gameplay', 'include']):
-                        key_features.append(li_text)
-                # If not enough, take first few paragraphs
-                if len(key_features) < 3:
-                    for p in soup.find_all('p')[:5]:
-                        p_text = p.get_text().strip()
-                        if 30 < len(p_text) < 250:
-                            key_features.append(p_text[:150] + "…" if len(p_text) > 150 else p_text)
-                key_features = key_features[:4] or ["Not Available"]
+            # 6. Publisher
+            publisher = "Not Available"
+            pub_match = re.search(r'publisher:?\s*([^.]+)', text, re.IGNORECASE)
+            if pub_match:
+                publisher = pub_match.group(1).strip()
 
-                # 4. Platform Availability
-                platforms = []
-                platform_keywords = {
-                    'PS5': ['ps5', 'playstation 5'],
-                    'PS4': ['ps4', 'playstation 4'],
-                    'Xbox Series X|S': ['xbox series'],
-                    'Xbox One': ['xbox one'],
-                    'Nintendo Switch': ['switch', 'nintendo switch'],
-                    'PC': ['pc', 'steam', 'windows']
-                }
-                text_lower = text.lower()
-                for plat, keywords in platform_keywords.items():
-                    if any(kw in text_lower for kw in keywords):
-                        platforms.append(plat)
-                if not platforms:
-                    platforms = ["Not Available"]
+            return {
+                'game_title': title[:150],
+                'release_date': release_date,
+                'key_features': features,
+                'platform_availability': platforms,
+                'developer_info': developer,
+                'publisher_info': publisher,
+                'article_url': article_url
+            }
 
-                # 5. Developer Information
-                developer = "Not Available"
-                dev_match = re.search(r'developer:?\s*([^.]+)', text, re.IGNORECASE)
-                if dev_match:
-                    developer = dev_match.group(1).strip()
+        except Exception as e:
+            print(f"    ✗ Error: {e}")
+            return None
 
-                # 6. Publisher Information
-                publisher = "Not Available"
-                pub_match = re.search(r'publisher:?\s*([^.]+)', text, re.IGNORECASE)
-                if pub_match:
-                    publisher = pub_match.group(1).strip()
+    def scrape_games(self, start_url, max_games=10):
+        """Main method: scrape at least 10 games from GamesRadar"""
+        print("\n" + "="*70)
+        print("🎮 GAMESRADAR SCRAPER")
+        print("="*70)
+        article_links = self.get_article_links(start_url, max_links=max_games*2)
+        if not article_links:
+            print("❌ No article links found.")
+            return []
 
-                scraped_games.append({
-                    'game_title': game_title[:150],
-                    'release_date': release_date,
-                    'key_features': key_features,
-                    'platform_availability': platforms,
-                    'developer_info': developer,
-                    'publisher_info': publisher,
-                    'article_url': article['url']
-                })
-            except Exception as e:
-                print(f"Error processing {article['url']}: {e}")
-                # Still include a minimal entry with "Not Available"
-                scraped_games.append({
-                    'game_title': article['title'][:150],
-                    'release_date': "Not Available",
-                    'key_features': ["Not Available"],
-                    'platform_availability': ["Not Available"],
-                    'developer_info': "Not Available",
-                    'publisher_info': "Not Available",
-                    'article_url': article['url']
-                })
+        scraped = []
+        for i, link in enumerate(article_links):
+            if len(scraped) >= max_games:
+                break
+            print(f"\n📊 Article {i+1}/{len(article_links)}")
+            game_info = self.extract_game_info(link['url'], link['title'])
+            if game_info:
+                scraped.append(game_info)
+            time.sleep(1)  # Be respectful
 
-        return scraped_games
+        print(f"\n✅ Scraped {len(scraped)} games (requested {max_games})")
+        return scraped
