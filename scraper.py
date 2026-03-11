@@ -1,161 +1,59 @@
 import requests
 from bs4 import BeautifulSoup
-import time
-import re
-from urllib.parse import urljoin
+import random
+from urllib.parse import urljoin, urlparse
 
-class GamesRadarScraper:
-    def __init__(self):
-        self.base_url = "https://www.gamesradar.com"
-        self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        }
-        self.session = requests.Session()
-        self.session.headers.update(self.headers)
+def get_random_articles(base_url, max_articles=10):
+    """
+    Fetch a GamesRadar page and return up to `max_articles` random article URLs.
+    """
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    }
 
-    def get_article_links(self, url, max_links=15):
-        """Extract article links from a listing page (like homepage)"""
-        print(f"📡 Fetching article list from: {url}")
-        try:
-            resp = self.session.get(url, timeout=10)
-            soup = BeautifulSoup(resp.text, 'html.parser')
-            links = []
-            # Look for common article containers
-            for article in soup.find_all('div', class_=re.compile(r'listingResult|result|article')):
-                link_tag = article.find('a', href=True)
-                if link_tag:
-                    href = link_tag['href']
-                    if href.startswith('http'):
-                        full_url = href
-                    else:
-                        full_url = urljoin(self.base_url, href)
-                    # Get title
-                    title_elem = article.find(['h3', 'h2', 'h4'], class_=re.compile(r'title|name'))
-                    title = title_elem.get_text().strip() if title_elem else link_tag.get_text().strip()
-                    if 'gamesradar.com' in full_url and len(title) > 10:
-                        links.append({'url': full_url, 'title': title})
-            # Remove duplicates
-            seen = set()
-            unique = []
-            for l in links:
-                if l['url'] not in seen:
-                    seen.add(l['url'])
-                    unique.append(l)
-            print(f"✅ Found {len(unique)} article links")
-            return unique[:max_links]
-        except Exception as e:
-            print(f"❌ Error fetching article list: {e}")
-            return []
+    try:
+        response = requests.get(base_url, headers=headers, timeout=10)
+        response.raise_for_status()
+    except Exception as e:
+        print(f"Error fetching the page: {e}")
+        return []
 
-    def extract_game_info(self, article_url, article_title):
-        """Extract all required fields from an article page"""
-        try:
-            print(f"  📄 Processing: {article_title[:60]}...")
-            resp = self.session.get(article_url, timeout=10)
-            soup = BeautifulSoup(resp.text, 'html.parser')
-            # Remove scripts/styles
-            for tag in soup(['script', 'style']):
-                tag.decompose()
-            text = soup.get_text()
+    soup = BeautifulSoup(response.text, 'html.parser')
+    article_links = set()
 
-            # 1. Game Title (use h1 if available)
-            title = article_title
-            h1 = soup.find('h1')
-            if h1:
-                title = h1.get_text().strip()
+    # Common article path patterns on GamesRadar
+    article_patterns = ['/news/', '/features/', '/reviews/', '/gaming/', '/how-to/', '/guides/']
 
-            # 2. Release Date
-            release_date = "Not Available"
-            date_patterns = [
-                r'release date:?\s*([^.]+)',
-                r'launch(?:es)?:?\s*([^.]+)',
-                r'out now:?\s*([^.]+)',
-                r'coming:?\s*([^.]+)',
-                r'\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s*\d{4}\b'
-            ]
-            for pat in date_patterns:
-                match = re.search(pat, text, re.IGNORECASE)
-                if match:
-                    release_date = match.group(0).strip()
-                    break
+    for link in soup.find_all('a', href=True):
+        href = link['href']
+        full_url = urljoin(base_url, href)
+        parsed = urlparse(full_url)
 
-            # 3. Key Features (look for bullet points or feature lists)
-            features = []
-            # Find list items that might be features
-            for li in soup.find_all('li'):
-                li_text = li.get_text().strip()
-                if 20 < len(li_text) < 200 and any(k in li_text.lower() for k in ['feature', 'gameplay', 'include', 'allows']):
-                    features.append(li_text)
-            # If none, take first few paragraphs
-            if len(features) < 3:
-                for p in soup.find_all('p')[:5]:
-                    p_text = p.get_text().strip()
-                    if 30 < len(p_text) < 250:
-                        features.append(p_text[:150] + "…" if len(p_text) > 150 else p_text)
-            features = features[:4] or ["Not Available"]
+        # Must be on gamesradar.com domain
+        if 'gamesradar.com' not in parsed.netloc:
+            continue
 
-            # 4. Platforms
-            platforms = []
-            platform_keywords = {
-                'PS5': ['ps5', 'playstation 5'],
-                'PS4': ['ps4', 'playstation 4'],
-                'Xbox Series X|S': ['xbox series'],
-                'Xbox One': ['xbox one'],
-                'Nintendo Switch': ['switch', 'nintendo switch'],
-                'PC': ['pc', 'steam', 'windows']
-            }
-            text_lower = text.lower()
-            for plat, keys in platform_keywords.items():
-                if any(k in text_lower for k in keys):
-                    platforms.append(plat)
-            if not platforms:
-                platforms = ["Not Available"]
+        # Check if path contains any of the article patterns
+        if any(pattern in parsed.path for pattern in article_patterns):
+            # Avoid duplicates and non-article pages (e.g., main sections)
+            if not parsed.path.endswith(('/news/', '/features/', '/reviews/', '/gaming/')):
+                article_links.add(full_url)
 
-            # 5. Developer
-            developer = "Not Available"
-            dev_match = re.search(r'developer:?\s*([^.]+)', text, re.IGNORECASE)
-            if dev_match:
-                developer = dev_match.group(1).strip()
+    # Convert to list and shuffle
+    article_list = list(article_links)
+    random.shuffle(article_list)
 
-            # 6. Publisher
-            publisher = "Not Available"
-            pub_match = re.search(r'publisher:?\s*([^.]+)', text, re.IGNORECASE)
-            if pub_match:
-                publisher = pub_match.group(1).strip()
+    if not article_list:
+        print("No articles found on this page. Try a different GamesRadar URL.")
+        return []
 
-            return {
-                'game_title': title[:150],
-                'release_date': release_date,
-                'key_features': features,
-                'platform_availability': platforms,
-                'developer_info': developer,
-                'publisher_info': publisher,
-                'article_url': article_url
-            }
+    selected = article_list[:max_articles]
+    print(f"Found {len(article_list)} articles. Showing {len(selected)} random:")
+    for i, url in enumerate(selected, 1):
+        print(f"{i}. {url}")
 
-        except Exception as e:
-            print(f"    ✗ Error: {e}")
-            return None
+    return selected
 
-    def scrape_games(self, start_url, max_games=10):
-        """Main method: scrape at least 10 games from GamesRadar"""
-        print("\n" + "="*70)
-        print("🎮 GAMESRADAR SCRAPER")
-        print("="*70)
-        article_links = self.get_article_links(start_url, max_links=max_games*2)
-        if not article_links:
-            print("❌ No article links found.")
-            return []
-
-        scraped = []
-        for i, link in enumerate(article_links):
-            if len(scraped) >= max_games:
-                break
-            print(f"\n📊 Article {i+1}/{len(article_links)}")
-            game_info = self.extract_game_info(link['url'], link['title'])
-            if game_info:
-                scraped.append(game_info)
-            time.sleep(1)  # Be respectful
-
-        print(f"\n✅ Scraped {len(scraped)} games (requested {max_games})")
-        return scraped
+if __name__ == "__main__":
+    url = input("Enter GamesRadar URL: ").strip()
+    get_random_articles(url)
