@@ -1,78 +1,112 @@
-from requests_html import HTMLSession
-import time
-import random
+import requests
+import json
 import re
+import random
+from urllib.parse import urljoin
 
 class GamesRadarScraper:
     def __init__(self):
-        self.session = HTMLSession()
-        self.session.headers.update({
+        self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        })
+        }
+        self.session = requests.Session()
+        self.session.headers.update(self.headers)
     
     def scrape_from_url(self, target_url, count=10):
-        """Scrape articles using JavaScript rendering"""
+        """Extract articles from JSON embedded in the page"""
         print(f"\n🎮 SCRAPING FROM: {target_url}")
         
         try:
-            # Get the page and render JavaScript
-            print("📡 Fetching page with JavaScript...")
-            response = self.session.get(target_url)
-            response.html.render(timeout=20, sleep=2)  # Wait for JS to load
+            # Fetch the page
+            response = self.session.get(target_url, timeout=15)
+            html = response.text
             
-            print("✅ Page rendered successfully")
+            # Try to find JSON-LD data (common for article listings)
+            articles = []
             
-            # Find all article links
-            all_articles = []
-            
-            # Look for article links in the rendered content
-            links = response.html.find('a')
-            print(f"📊 Found {len(links)} total links")
-            
-            for link in links:
-                href = link.attrs.get('href', '')
-                text = link.text.strip()
-                
-                if not href or not text:
+            # Method 1: Look for JSON-LD script tags
+            json_ld_matches = re.findall(r'<script type="application/ld\+json">(.*?)</script>', html, re.DOTALL)
+            for match in json_ld_matches:
+                try:
+                    data = json.loads(match)
+                    # Handle different JSON-LD structures
+                    if isinstance(data, dict):
+                        if '@graph' in data:
+                            for item in data['@graph']:
+                                if item.get('@type') == 'Article' and 'url' in item:
+                                    articles.append({
+                                        'url': item['url'],
+                                        'title': item.get('headline', '')
+                                    })
+                        elif data.get('@type') == 'Article':
+                            articles.append({
+                                'url': data.get('url', ''),
+                                'title': data.get('headline', '')
+                            })
+                    elif isinstance(data, list):
+                        for item in data:
+                            if item.get('@type') == 'Article':
+                                articles.append({
+                                    'url': item.get('url', ''),
+                                    'title': item.get('headline', '')
+                                })
+                except:
                     continue
-                    
-                if not href.startswith('http'):
-                    if href.startswith('/'):
-                        href = f"https://www.gamesradar.com{href}"
-                    else:
-                        continue
-                
-                # Check if it's a game article
-                if ('gamesradar.com' in href and 
-                    len(text) > 15 and
-                    any(x in href for x in ['/news/', '/reviews/', '/games/', '/features/'])):
-                    
-                    all_articles.append({
-                        'url': href,
-                        'title': text
-                    })
             
-            # Remove duplicates
-            unique = []
+            # Method 2: Look for Next.js data (common in modern sites)
+            next_data_matches = re.findall(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', html, re.DOTALL)
+            for match in next_data_matches:
+                try:
+                    data = json.loads(match)
+                    # Navigate through the complex structure to find articles
+                    # This is site-specific and may need adjustment
+                    props = data.get('props', {})
+                    page_props = props.get('pageProps', {})
+                    # Look for article lists in various places
+                    for key, value in page_props.items():
+                        if isinstance(value, list):
+                            for item in value:
+                                if isinstance(item, dict) and 'url' in item and 'title' in item:
+                                    articles.append({
+                                        'url': urljoin(target_url, item['url']),
+                                        'title': item['title']
+                                    })
+                except:
+                    continue
+            
+            # Method 3: Fallback – look for <a> tags with article-like URLs
+            if len(articles) < count:
+                # Simple regex to find links that look like articles
+                link_pattern = r'<a[^>]+href="([^"]+)"[^>]*>([^<]+)</a>'
+                for url, title in re.findall(link_pattern, html):
+                    if ('/news/' in url or '/reviews/' in url or '/games/' in url) and len(title) > 15:
+                        full_url = urljoin(target_url, url)
+                        articles.append({
+                            'url': full_url,
+                            'title': title.strip()
+                        })
+            
+            # Remove duplicates and filter
             seen = set()
-            for article in all_articles:
-                if article['url'] not in seen:
-                    seen.add(article['url'])
-                    unique.append(article)
+            unique_articles = []
+            for a in articles:
+                if a['url'] and a['url'] not in seen and len(a['title']) > 10:
+                    seen.add(a['url'])
+                    unique_articles.append(a)
             
-            print(f"✅ Found {len(unique)} unique articles")
+            print(f"✅ Found {len(unique_articles)} unique articles via JSON")
             
-            if not unique:
+            if not unique_articles:
                 print("❌ No articles found")
                 return []
             
             # Select random articles
-            if len(unique) >= count:
-                selected = random.sample(unique, count)
+            if len(unique_articles) >= count:
+                selected = random.sample(unique_articles, count)
             else:
-                selected = unique
+                selected = unique_articles
             
-            # Extract info (simplified for speed)
+            # Return with placeholder info (you can enhance this later)
             games = []
             for article in selected:
                 games.append({
